@@ -1262,12 +1262,12 @@ static int linux_default_scan_devices (struct libusb_context *ctx)
 }
 #endif
 
-static int op_open(struct libusb_device_handle *handle)
+static int op_open_fd(struct libusb_device_handle *handle, int fd)
 {
 	struct linux_device_handle_priv *hpriv = _device_handle_priv(handle);
 	int r;
 
-	hpriv->fd = _get_usbfs_fd(handle->dev, O_RDWR, 0);
+    hpriv->fd = fd;
 	if (hpriv->fd < 0) {
 		if (hpriv->fd == LIBUSB_ERROR_NO_DEVICE) {
 			/* device will still be marked as attached if hotplug monitor thread
@@ -1297,6 +1297,11 @@ static int op_open(struct libusb_device_handle *handle)
 	}
 
 	return usbi_add_pollfd(HANDLE_CTX(handle), hpriv->fd, POLLOUT);
+}
+
+static int op_open(struct libusb_device_handle *handle)
+{
+    op_open_fd(handle, _get_usbfs_fd(handle->dev, O_RDWR, 0));
 }
 
 static void op_close(struct libusb_device_handle *dev_handle)
@@ -2573,6 +2578,7 @@ const struct usbi_os_backend linux_usbfs_backend = {
 	.get_config_descriptor_by_value = op_get_config_descriptor_by_value,
 
 	.open = op_open,
+    .open_fd = op_open_fd,
 	.close = op_close,
 	.get_configuration = op_get_configuration,
 	.set_configuration = op_set_configuration,
