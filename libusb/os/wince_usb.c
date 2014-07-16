@@ -1,5 +1,5 @@
 /*
- * Windows CE backend for libusbx 1.0
+ * Windows CE backend for libusb 1.0
  * Copyright © 2011-2013 RealVNC Ltd.
  * Large portions taken from Windows backend, which is
  * Copyright © 2009-2010 Pete Batard <pbatard@gmail.com>
@@ -38,7 +38,7 @@ unsigned __stdcall wince_clock_gettime_threaded(void* param);
 uint64_t hires_frequency, hires_ticks_to_ps;
 int errno;
 const uint64_t epoch_time = UINT64_C(116444736000000000);       // 1970.01.01 00:00:000 in MS Filetime
-enum windows_version windows_version = WINDOWS_CE;
+int windows_version = WINDOWS_CE;
 static int concurrent_usage = -1;
 // Timer thread
 // NB: index 0 is for monotonic and 1 is for the thread exit event
@@ -689,6 +689,8 @@ static int wince_submit_transfer(
 		return wince_submit_control_or_bulk_transfer(itransfer);
 	case LIBUSB_TRANSFER_TYPE_ISOCHRONOUS:
 		return wince_submit_iso_transfer(itransfer);
+	case LIBUSB_TRANSFER_TYPE_BULK_STREAM:
+		return LIBUSB_ERROR_NOT_SUPPORTED;
 	default:
 		usbi_err(TRANSFER_CTX(transfer), "unknown endpoint type %d", transfer->type);
 		return LIBUSB_ERROR_INVALID_PARAM;
@@ -801,6 +803,8 @@ static void wince_handle_callback (struct usbi_transfer *itransfer, uint32_t io_
 	case LIBUSB_TRANSFER_TYPE_ISOCHRONOUS:
 		wince_transfer_callback (itransfer, io_result, io_size);
 		break;
+	case LIBUSB_TRANSFER_TYPE_BULK_STREAM:
+		return LIBUSB_ERROR_NOT_SUPPORTED;
 	default:
 		usbi_err(ITRANSFER_CTX(itransfer), "unknown endpoint type %d", transfer->type);
 	}
@@ -1004,6 +1008,9 @@ const struct usbi_os_backend wince_backend = {
         wince_set_interface_altsetting,
         wince_clear_halt,
         wince_reset_device,
+
+	NULL,				/* alloc_streams */
+	NULL,				/* free_streams */
 
         wince_kernel_driver_active,
         wince_detach_kernel_driver,

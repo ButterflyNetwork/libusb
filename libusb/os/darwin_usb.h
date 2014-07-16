@@ -1,5 +1,5 @@
 /*
- * darwin backend for libusbx 1.0
+ * darwin backend for libusb 1.0
  * Copyright © 2008-2013 Nathan Hjelm <hjelmn@users.sourceforge.net>
  *
  * This library is free software; you can redistribute it and/or
@@ -137,7 +137,7 @@ struct darwin_device_handle_priv {
     uint8_t              num_endpoints;
     CFRunLoopSourceRef   cfSource;
     uint64_t             frames[256];
-    uint8_t            endpoint_addrs[USB_MAXENDPOINTS];
+    uint8_t              endpoint_addrs[USB_MAXENDPOINTS];
   } interfaces[USB_MAXINTERFACES];
 };
 

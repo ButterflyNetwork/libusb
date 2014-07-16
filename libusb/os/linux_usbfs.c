@@ -1,6 +1,6 @@
 /* -*- Mode: C; c-basic-offset:8 ; indent-tabs-mode:t -*- */
 /*
- * Linux usbfs backend for libusbx
+ * Linux usbfs backend for libusb
  * Copyright © 2007-2009 Daniel Drake <dsd@gentoo.org>
  * Copyright © 2001 Johannes Erdfelt <johannes@erdfelt.com>
  * Copyright © 2013 Nathan Hjelm <hjelmn@mac.com>
@@ -49,7 +49,7 @@
  * sysfs allows us to read the kernel's in-memory copies of device descriptors
  * and so forth, avoiding the need to open the device:
  *  - The binary "descriptors" file contains all config descriptors since
- *    2.6.26, commit 217a9081d8e69026186067711131b77f0ce219ed 
+ *    2.6.26, commit 217a9081d8e69026186067711131b77f0ce219ed
  *  - The binary "descriptors" file was added in 2.6.23, commit
  *    69d42a78f935d19384d1f6e4f94b65bb162b36df, but it only contains the
  *    active config descriptors
@@ -119,7 +119,7 @@ static int sysfs_can_relate_devices = -1;
 static int sysfs_has_descriptors = -1;
 
 /* how many times have we initted (and not exited) ? */
-static volatile int init_count = 0;
+static int init_count = 0;
 
 /* Serialize hotplug start/stop */
 usbi_mutex_static_t linux_hotplug_startstop_lock = USBI_MUTEX_INITIALIZER;
@@ -184,6 +184,7 @@ static int _get_usbfs_fd(struct libusb_device *dev, mode_t mode, int silent)
 	struct libusb_context *ctx = DEVICE_CTX(dev);
 	char path[PATH_MAX];
 	int fd;
+	int delay = 10000;
 
 	if (usbdev_names)
 		snprintf(path, PATH_MAX, "%s/usbdev%d.%d",
@@ -196,11 +197,23 @@ static int _get_usbfs_fd(struct libusb_device *dev, mode_t mode, int silent)
 	if (fd != -1)
 		return fd; /* Success */
 
+	if (errno == ENOENT) {
+		if (!silent) 
+			usbi_err(ctx, "File doesn't exist, wait %d ms and try again\n", delay/1000);
+   
+		/* Wait 10ms for USB device path creation.*/
+		usleep(delay);
+
+		fd = open(path, mode);
+		if (fd != -1)
+			return fd; /* Success */
+	}
+	
 	if (!silent) {
-		usbi_err(ctx, "libusbx couldn't open USB device %s: %s",
+		usbi_err(ctx, "libusb couldn't open USB device %s: %s",
 			 path, strerror(errno));
 		if (errno == EACCES && mode == O_RDWR)
-			usbi_err(ctx, "libusbx requires write access to USB "
+			usbi_err(ctx, "libusb requires write access to USB "
 				      "device nodes.");
 	}
 
@@ -576,7 +589,7 @@ static int sysfs_get_active_config(struct libusb_device *dev, int *config)
 	r = read(fd, tmp, sizeof(tmp));
 	close(fd);
 	if (r < 0) {
-		usbi_err(DEVICE_CTX(dev), 
+		usbi_err(DEVICE_CTX(dev),
 			"read bConfigurationValue failed ret=%d errno=%d", r, errno);
 		return LIBUSB_ERROR_IO;
 	} else if (r == 0) {
@@ -913,7 +926,7 @@ static int initialize_device(struct libusb_device *dev, uint8_t busnum,
 		}
 		priv->descriptors_len += r;
 	} while (priv->descriptors_len == descriptors_size);
-	
+
 	close(fd);
 
 	if (priv->descriptors_len < DEVICE_DESC_LENGTH) {
@@ -1487,6 +1500,56 @@ out:
 	return ret;
 }
 
+static int do_streams_ioctl(struct libusb_device_handle *handle, long req,
+	uint32_t num_streams, unsigned char *endpoints, int num_endpoints)
+{
+	int r, fd = _device_handle_priv(handle)->fd;
+	struct usbfs_streams *streams;
+
+	if (num_endpoints > 30) /* Max 15 in + 15 out eps */
+		return LIBUSB_ERROR_INVALID_PARAM;
+
+	streams = malloc(sizeof(struct usbfs_streams) + num_endpoints);
+	if (!streams)
+		return LIBUSB_ERROR_NO_MEM;
+
+	streams->num_streams = num_streams;
+	streams->num_eps = num_endpoints;
+	memcpy(streams->eps, endpoints, num_endpoints);
+
+	r = ioctl(fd, req, streams);
+
+	free(streams);
+
+	if (r < 0) {
+		if (errno == ENOTTY)
+			return LIBUSB_ERROR_NOT_SUPPORTED;
+		else if (errno == EINVAL)
+			return LIBUSB_ERROR_INVALID_PARAM;
+		else if (errno == ENODEV)
+			return LIBUSB_ERROR_NO_DEVICE;
+
+		usbi_err(HANDLE_CTX(handle),
+			"streams-ioctl failed error %d errno %d", r, errno);
+		return LIBUSB_ERROR_OTHER;
+	}
+	return r;
+}
+
+static int op_alloc_streams(struct libusb_device_handle *handle,
+	uint32_t num_streams, unsigned char *endpoints, int num_endpoints)
+{
+	return do_streams_ioctl(handle, IOCTL_USBFS_ALLOC_STREAMS,
+				num_streams, endpoints, num_endpoints);
+}
+
+static int op_free_streams(struct libusb_device_handle *handle,
+		unsigned char *endpoints, int num_endpoints)
+{
+	return do_streams_ioctl(handle, IOCTL_USBFS_FREE_STREAMS, 0,
+				endpoints, num_endpoints);
+}
+
 static int op_kernel_driver_active(struct libusb_device_handle *handle,
 	int interface)
 {
@@ -1694,8 +1757,7 @@ static void free_iso_urbs(struct linux_transfer_priv *tpriv)
 	tpriv->iso_urbs = NULL;
 }
 
-static int submit_bulk_transfer(struct usbi_transfer *itransfer,
-	unsigned char urb_type)
+static int submit_bulk_transfer(struct usbi_transfer *itransfer)
 {
 	struct libusb_transfer *transfer =
 		USBI_TRANSFER_TO_LIBUSB_TRANSFER(itransfer);
@@ -1783,7 +1845,19 @@ static int submit_bulk_transfer(struct usbi_transfer *itransfer,
 	for (i = 0; i < num_urbs; i++) {
 		struct usbfs_urb *urb = &urbs[i];
 		urb->usercontext = itransfer;
-		urb->type = urb_type;
+		switch (transfer->type) {
+		case LIBUSB_TRANSFER_TYPE_BULK:
+			urb->type = USBFS_URB_TYPE_BULK;
+			urb->stream_id = 0;
+			break;
+		case LIBUSB_TRANSFER_TYPE_BULK_STREAM:
+			urb->type = USBFS_URB_TYPE_BULK;
+			urb->stream_id = itransfer->stream_id;
+			break;
+		case LIBUSB_TRANSFER_TYPE_INTERRUPT:
+			urb->type = USBFS_URB_TYPE_INTERRUPT;
+			break;
+		}
 		urb->endpoint = transfer->endpoint;
 		urb->buffer = transfer->buffer + (i * bulk_buffer_len);
 		/* don't set the short not ok flag for the last URB */
@@ -1813,7 +1887,7 @@ static int submit_bulk_transfer(struct usbi_transfer *itransfer,
 					"submiturb failed error %d errno=%d", r, errno);
 				r = LIBUSB_ERROR_IO;
 			}
-	
+
 			/* if the first URB submission fails, we can simply free up and
 			 * return failure immediately. */
 			if (i == 0) {
@@ -1828,7 +1902,7 @@ static int submit_bulk_transfer(struct usbi_transfer *itransfer,
 			 * complications:
 			 *  - discarding is asynchronous - discarded urbs will be reaped
 			 *    later. the user must not have freed the transfer when the
-			 *    discarded URBs are reaped, otherwise libusbx will be using
+			 *    discarded URBs are reaped, otherwise libusb will be using
 			 *    freed memory.
 			 *  - the earlier URBs may have completed successfully and we do
 			 *    not want to throw away any data.
@@ -1990,7 +2064,7 @@ static int submit_iso_transfer(struct usbi_transfer *itransfer)
 			 * complications:
 			 *  - discarding is asynchronous - discarded urbs will be reaped
 			 *    later. the user must not have freed the transfer when the
-			 *    discarded URBs are reaped, otherwise libusbx will be using
+			 *    discarded URBs are reaped, otherwise libusb will be using
 			 *    freed memory.
 			 *  - the earlier URBs may have completed successfully and we do
 			 *    not want to throw away any data.
@@ -2066,9 +2140,10 @@ static int op_submit_transfer(struct usbi_transfer *itransfer)
 	case LIBUSB_TRANSFER_TYPE_CONTROL:
 		return submit_control_transfer(itransfer);
 	case LIBUSB_TRANSFER_TYPE_BULK:
-		return submit_bulk_transfer(itransfer, USBFS_URB_TYPE_BULK);
+	case LIBUSB_TRANSFER_TYPE_BULK_STREAM:
+		return submit_bulk_transfer(itransfer);
 	case LIBUSB_TRANSFER_TYPE_INTERRUPT:
-		return submit_bulk_transfer(itransfer, USBFS_URB_TYPE_INTERRUPT);
+		return submit_bulk_transfer(itransfer);
 	case LIBUSB_TRANSFER_TYPE_ISOCHRONOUS:
 		return submit_iso_transfer(itransfer);
 	default:
@@ -2086,6 +2161,7 @@ static int op_cancel_transfer(struct usbi_transfer *itransfer)
 
 	switch (transfer->type) {
 	case LIBUSB_TRANSFER_TYPE_BULK:
+	case LIBUSB_TRANSFER_TYPE_BULK_STREAM:
 		if (tpriv->reap_action == ERROR)
 			break;
 		/* else, fall through */
@@ -2116,6 +2192,7 @@ static void op_clear_transfer_priv(struct usbi_transfer *itransfer)
 	switch (transfer->type) {
 	case LIBUSB_TRANSFER_TYPE_CONTROL:
 	case LIBUSB_TRANSFER_TYPE_BULK:
+	case LIBUSB_TRANSFER_TYPE_BULK_STREAM:
 	case LIBUSB_TRANSFER_TYPE_INTERRUPT:
 		usbi_mutex_lock(&itransfer->lock);
 		if (tpriv->urbs)
@@ -2165,7 +2242,7 @@ static int handle_bulk_completion(struct usbi_transfer *itransfer,
 		 *
 		 * When this happens, our objectives are not to lose any "surplus" data,
 		 * and also to stick it at the end of the previously-received data
-		 * (closing any holes), so that libusbx reports the total amount of
+		 * (closing any holes), so that libusb reports the total amount of
 		 * transferred data and presents it in a contiguous chunk.
 		 */
 		if (urb->actual_length > 0) {
@@ -2484,6 +2561,7 @@ static int reap_for_handle(struct libusb_device_handle *handle)
 	case LIBUSB_TRANSFER_TYPE_ISOCHRONOUS:
 		return handle_iso_completion(itransfer, urb);
 	case LIBUSB_TRANSFER_TYPE_BULK:
+	case LIBUSB_TRANSFER_TYPE_BULK_STREAM:
 	case LIBUSB_TRANSFER_TYPE_INTERRUPT:
 		return handle_bulk_completion(itransfer, urb);
 	case LIBUSB_TRANSFER_TYPE_CONTROL:
@@ -2515,6 +2593,12 @@ static int op_handle_events(struct libusb_context *ctx,
 			hpriv = _device_handle_priv(handle);
 			if (hpriv->fd == pollfd->fd)
 				break;
+		}
+
+		if (!hpriv || hpriv->fd != pollfd->fd) {
+			usbi_err(ctx, "cannot find handle for fd %d\n",
+				 pollfd->fd);
+			continue;
 		}
 
 		if (pollfd->revents & POLLERR) {
@@ -2588,6 +2672,9 @@ const struct usbi_os_backend linux_usbfs_backend = {
 	.set_interface_altsetting = op_set_interface,
 	.clear_halt = op_clear_halt,
 	.reset_device = op_reset_device,
+
+	.alloc_streams = op_alloc_streams,
+	.free_streams = op_free_streams,
 
 	.kernel_driver_active = op_kernel_driver_active,
 	.detach_kernel_driver = op_detach_kernel_driver,

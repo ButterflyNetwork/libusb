@@ -115,6 +115,9 @@ const struct usbi_os_backend openbsd_backend = {
 	obsd_clear_halt,
 	obsd_reset_device,
 
+	NULL,				/* alloc_streams */
+	NULL,				/* free_streams */
+
 	NULL,				/* kernel_driver_active() */
 	NULL,				/* detach_kernel_driver() */
 	NULL,				/* attach_kernel_driver() */
@@ -504,6 +507,9 @@ obsd_submit_transfer(struct usbi_transfer *itransfer)
 		}
 		err = _sync_gen_transfer(itransfer);
 		break;
+	case LIBUSB_TRANSFER_TYPE_BULK_STREAM:
+		err = LIBUSB_ERROR_NOT_SUPPORTED;
+		break;
 	}
 
 	if (err)
@@ -700,7 +706,7 @@ _sync_control_transfer(struct usbi_transfer *itransfer)
 	req.ucr_addr = transfer->dev_handle->dev->device_address;
 	req.ucr_request.bmRequestType = setup->bmRequestType;
 	req.ucr_request.bRequest = setup->bRequest;
-	/* Don't use USETW, libusbx already deals with the endianness */
+	/* Don't use USETW, libusb already deals with the endianness */
 	(*(uint16_t *)req.ucr_request.wValue) = setup->wValue;
 	(*(uint16_t *)req.ucr_request.wIndex) = setup->wIndex;
 	(*(uint16_t *)req.ucr_request.wLength) = setup->wLength;

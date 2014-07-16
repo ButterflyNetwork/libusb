@@ -1,6 +1,6 @@
 /* -*- Mode: C; indent-tabs-mode:t ; c-basic-offset:8 -*- */
 /*
- * Hotplug functions for libusbx
+ * Hotplug functions for libusb
  * Copyright © 2012-2013 Nathan Hjelm <hjelmn@mac.com>
  * Copyright © 2012-2013 Peter Stuge <peter@stuge.se>
  *
@@ -45,7 +45,7 @@
  *
  * \section intro Introduction
  *
- * Version 1.0.16, \ref LIBUSBX_API_VERSION >= 0x01000102, has added support
+ * Version 1.0.16, \ref LIBUSB_API_VERSION >= 0x01000102, has added support
  * for hotplug events on <b>some</b> platforms (you should test if your platform
  * supports hotplug notification by calling \ref libusb_has_capability() with
  * parameter \ref LIBUSB_CAP_HAS_HOTPLUG). 
@@ -80,12 +80,16 @@
  * are invalid and will remain so even if the device comes back.
  *
  * When handling a LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED event it is considered
- * safe to call any libusbx function that takes a libusb_device. On the other hand,
+ * safe to call any libusb function that takes a libusb_device. On the other hand,
  * when handling a LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT event the only safe function
  * is libusb_get_device_descriptor().
  *
  * The following code provides an example of the usage of the hotplug interface:
 \code
+#include <stdio.h>
+#include <stdlib.h>
+#include <libusb.h>
+
 static int count = 0;
 
 int hotplug_callback(struct libusb_context *ctx, struct libusb_device *dev,
@@ -131,10 +135,11 @@ int main (void) {
   }
 
   while (count < 2) {
+    libusb_handle_events_completed(NULL, NULL);
     usleep(10000);
   }
 
-  libusb_hotplug_deregister_callback(handle);
+  libusb_hotplug_deregister_callback(NULL, handle);
   libusb_exit(NULL);
 
   return 0;
