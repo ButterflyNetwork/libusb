@@ -81,6 +81,10 @@ static const char *usbfs_path = NULL;
 /* use usbdev*.* device names in /dev instead of the usbfs bus directories */
 static int usbdev_names = 0;
 
+/* Linux 2.6.23 adds support for O_CLOEXEC when opening files, which marks the
+ * close-on-exec flag in the underlying file descriptor. */
+static int supports_flag_cloexec = -1;
+
 /* Linux 2.6.32 adds support for a bulk continuation URB flag. this basically
  * allows us to mark URBs as being part of a specific logical transfer when
  * we submit them to the kernel. then, on any error except a cancellation, all
@@ -180,6 +184,16 @@ struct linux_transfer_priv {
 	int iso_packet_offset;
 };
 
+static int _open(const char *path, int flags)
+{
+#if defined(O_CLOEXEC)
+	if (supports_flag_cloexec)
+		return open(path, flags | O_CLOEXEC);
+	else
+#endif
+		return open(path, flags);
+}
+
 static int _get_usbfs_fd(struct libusb_device *dev, mode_t mode, int silent)
 {
 	struct libusb_context *ctx = DEVICE_CTX(dev);
@@ -194,7 +208,7 @@ static int _get_usbfs_fd(struct libusb_device *dev, mode_t mode, int silent)
 		snprintf(path, PATH_MAX, "%s/%03d/%03d",
 			usbfs_path, dev->bus_number, dev->device_address);
 
-	fd = open(path, mode);
+	fd = _open(path, mode);
 	if (fd != -1)
 		return fd; /* Success */
 
@@ -205,7 +219,7 @@ static int _get_usbfs_fd(struct libusb_device *dev, mode_t mode, int silent)
 		/* Wait 10ms for USB device path creation.*/
 		nanosleep(&(struct timespec){delay / 1000000, (delay * 1000) % 1000000000UL}, NULL);
 
-		fd = open(path, mode);
+		fd = _open(path, mode);
 		if (fd != -1)
 			return fd; /* Success */
 	}
@@ -387,6 +401,15 @@ static int op_init(struct libusb_context *ctx)
 	if (monotonic_clkid == -1)
 		monotonic_clkid = find_monotonic_clock();
 
+	if (supports_flag_cloexec == -1) {
+		/* O_CLOEXEC flag available from Linux 2.6.23 */
+		supports_flag_cloexec = kernel_version_ge(2,6,23);
+		if (supports_flag_cloexec == -1) {
+			usbi_err(ctx, "error checking for O_CLOEXEC support");
+			return LIBUSB_ERROR_OTHER;
+		}
+	}
+
 	if (supports_flag_bulk_continuation == -1) {
 		/* bulk continuation URB flag available from Linux 2.6.32 */
 		supports_flag_bulk_continuation = kernel_version_ge(2,6,32);
@@ -463,8 +486,9 @@ static int op_init(struct libusb_context *ctx)
 	return r;
 }
 
-static void op_exit(void)
+static void op_exit(struct libusb_context *ctx)
 {
+	UNUSED(ctx);
 	usbi_mutex_static_lock(&linux_hotplug_startstop_lock);
 	assert(init_count != 0);
 	if (!--init_count) {
@@ -526,7 +550,7 @@ static int _open_sysfs_attr(struct libusb_device *dev, const char *attr)
 
 	snprintf(filename, PATH_MAX, "%s/%s/%s",
 		SYSFS_DEVICE_PATH, priv->sysfs_dir, attr);
-	fd = open(filename, O_RDONLY);
+	fd = _open(filename, O_RDONLY);
 	if (fd < 0) {
 		usbi_err(DEVICE_CTX(dev),
 			"open %s failed ret=%d errno=%d", filename, fd, errno);
@@ -542,12 +566,12 @@ static int __read_sysfs_attr(struct libusb_context *ctx,
 {
 	char filename[PATH_MAX];
 	FILE *f;
-	int r, value;
+	int fd, r, value;
 
 	snprintf(filename, PATH_MAX, "%s/%s/%s", SYSFS_DEVICE_PATH,
 		 devname, attr);
-	f = fopen(filename, "r");
-	if (f == NULL) {
+	fd = _open(filename, O_RDONLY);
+	if (fd == -1) {
 		if (errno == ENOENT) {
 			/* File doesn't exist. Assume the device has been
 			   disconnected (see trac ticket #70). */
@@ -555,6 +579,13 @@ static int __read_sysfs_attr(struct libusb_context *ctx,
 		}
 		usbi_err(ctx, "open %s failed errno=%d", filename, errno);
 		return LIBUSB_ERROR_IO;
+	}
+
+	f = fdopen(fd, "r");
+	if (f == NULL) {
+		usbi_err(ctx, "fdopen %s failed errno=%d", filename, errno);
+		close(fd);
+		return LIBUSB_ERROR_OTHER;
 	}
 
 	r = fscanf(f, "%d", &value);
@@ -806,7 +837,7 @@ static int op_get_active_config_descriptor(struct libusb_device *dev,
 	if (r < 0)
 		return r;
 
-	len = MIN(len, r);
+	len = MIN(len, (size_t)r);
 	memcpy(buffer, config_desc, len);
 	return len;
 }
@@ -836,7 +867,7 @@ static int op_get_config_descriptor(struct libusb_device *dev,
 		descriptors += r;
 	}
 
-	len = MIN(len, r);
+	len = MIN(len, (size_t)r);
 	memcpy(buffer, descriptors, len);
 	return len;
 }
@@ -1029,9 +1060,11 @@ retry:
 	usbi_mutex_lock(&ctx->usb_devs_lock);
 	list_for_each_entry(it, &ctx->usb_devs, list, struct libusb_device) {
 		struct linux_device_priv *priv = _device_priv(it);
-		if (0 == strcmp (priv->sysfs_dir, parent_sysfs_dir)) {
-			dev->parent_dev = libusb_ref_device(it);
-			break;
+		if (priv->sysfs_dir) {
+			if (0 == strcmp (priv->sysfs_dir, parent_sysfs_dir)) {
+				dev->parent_dev = libusb_ref_device(it);
+				break;
+			}
 		}
 	}
 	usbi_mutex_unlock(&ctx->usb_devs_lock);
@@ -2688,7 +2721,7 @@ static clockid_t op_get_timerfd_clockid(void)
 }
 #endif
 
-const struct usbi_os_backend linux_usbfs_backend = {
+const struct usbi_os_backend usbi_backend = {
 	.name = "Linux usbfs",
 	.caps = USBI_CAP_HAS_HID_ACCESS|USBI_CAP_SUPPORTS_DETACH_KERNEL_DRIVER,
 	.init = op_init,
