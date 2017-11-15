@@ -7,7 +7,16 @@ SANDBOX_DIR=$(dirname $1)
 pushd $SANDBOX_DIR > /dev/null
 
 ./bootstrap.sh > /dev/null 2>&1
+
+set +e
 ./configure --silent
+rc=$?
+set -e
+
+if [[ $rc != 0 ]]; then
+    >&2 echo "configure failed; displaying config.log..."
+    cat config.log
+fi
 
 CONFIG_HDR=$PWD/config.h
 popd > /dev/null
