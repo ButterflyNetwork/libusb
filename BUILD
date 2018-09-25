@@ -73,7 +73,7 @@ cc_library(
             "libusb/os/linux_usbfs.h",
             "libusb/os/linux_udev.c",
             "linux/config.h",
-        ],
+      ],
         "//conditions:default": [],
     }),
     hdrs = [
