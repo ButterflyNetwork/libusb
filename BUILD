@@ -26,6 +26,13 @@ config_setting(
     },
 )
 
+config_setting(
+    name = "armeabi-v7a",
+    values = {
+        "cpu": "armeabi-v7a",
+    },
+)
+
 _android_srcs = [
     "android/config.h",
     "libusb/os/linux_netlink.c",
@@ -59,6 +66,12 @@ cc_library(
             "libusb/os/linux_udev.c",
             "libusb/os/linux_usbfs.c",
             "libusb/os/linux_usbfs.h",
+            "linux/config.h",
+        ],
+        ":armeabi-v7a": [
+            "libusb/os/linux_usbfs.c",
+            "libusb/os/linux_usbfs.h",
+            "libusb/os/linux_udev.c",
             "linux/config.h",
         ],
         "//conditions:default": [],
