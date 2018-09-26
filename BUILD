@@ -61,7 +61,7 @@ cc_library(
             "libusb/os/darwin_usb.c",
             "libusb/os/darwin_usb.h",
             "Xcode/config.h",
-        ],
+        ], 
         ":linux": [
             "libusb/os/linux_udev.c",
             "libusb/os/linux_usbfs.c",
