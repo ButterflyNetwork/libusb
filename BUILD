@@ -61,7 +61,7 @@ cc_library(
             "libusb/os/darwin_usb.c",
             "libusb/os/darwin_usb.h",
             "Xcode/config.h",
-        ], 
+        ],
         ":linux": [
             "libusb/os/linux_udev.c",
             "libusb/os/linux_usbfs.c",
@@ -69,10 +69,10 @@ cc_library(
             "linux/config.h",
         ],
         ":armeabi-v7a": [
-            "libusb/os/linux_usbfs.c",
-            "libusb/os/linux_usbfs.h",
-            "libusb/os/linux_udev.c",
-            "linux/config.h",
+        "libusb/os/linux_udev.c",
+        "libusb/os/linux_usbfs.c",
+        "libusb/os/linux_usbfs.h",
+        "linux/config.h",
       ],
         "//conditions:default": [],
     }),
@@ -91,6 +91,9 @@ cc_library(
         ":linux": [
             "-I" + PACKAGE_NAME + "/linux",
         ],
+        ":armeabi-v7a": [
+            "-I" + PACKAGE_NAME + "/linux",
+        ],
         "//conditions:default": [],
     }),
     includes = ["."],
@@ -101,6 +104,12 @@ cc_library(
         ],
         ":linux": [
             "-ludev",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = select({
+        ":armeabi-v7a":[
+            "@libudev//:libudev",
         ],
         "//conditions:default": [],
     }),
