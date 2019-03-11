@@ -6,6 +6,13 @@ config_setting(
 )
 
 config_setting(
+    name = "darwin_x86_64",
+    values = {
+        "cpu": "darwin_x86_64",
+    },
+)
+
+config_setting(
     name = "linux",
     values = {
         "cpu": "k8",
@@ -55,6 +62,11 @@ cc_library(
             "libusb/os/darwin_usb.h",
             "Xcode/config.h",
         ],
+        ":darwin_x86_64": [
+            "libusb/os/darwin_usb.c",
+            "libusb/os/darwin_usb.h",
+            "Xcode/config.h",
+        ],
         ":linux": [
             "libusb/os/linux_udev.c",
             "libusb/os/linux_usbfs.c",
@@ -73,7 +85,11 @@ cc_library(
         ":android_x86_64": _android_copts,
         ":darwin": [
             "-I" + native.package_name() + "/Xcode",
-            "-mmacosx-version-min=10.12",
+            "-mmacosx-version-min=10.14",
+        ],
+        ":darwin_x86_64": [
+            "-I" + native.package_name() + "/Xcode",
+            "-mmacosx-version-min=10.14",
         ],
         ":linux": [
             "-I" + native.package_name() + "/linux",
@@ -83,6 +99,10 @@ cc_library(
     includes = ["."],
     linkopts = select({
         ":darwin": [
+            "-framework CoreFoundation",
+            "-framework IOKit",
+        ],
+        ":darwin_x86_64": [
             "-framework CoreFoundation",
             "-framework IOKit",
         ],
